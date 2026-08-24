@@ -49,13 +49,16 @@ function handleNotify(req, res) {
       return;
     }
 
-    console.log('[notify]', JSON.stringify(evt));
-
+    // Plane CE manda "issue" a secas (nombre plano V1), no "workitem.updated" como
+    // documenta developers.plane.so/dev-tools/intro-webhooks -- confirmado con logging
+    // temporal el 2026-08-24 contra esta instancia (v1.4.1).
     const isWorkItemEvent = /^workitem\./.test(evt.event || '') || /^issue\.?/.test(evt.event || '');
     if (!isWorkItemEvent) return;
 
     const projectId = evt.data && (evt.data.project_id || evt.data.project);
     if (ALLOWED_PROJECT_ID && projectId && projectId !== ALLOWED_PROJECT_ID) return;
+
+    console.log('[notify]', JSON.stringify({ event: evt.event, action: evt.action, entity_id: evt.data && evt.data.id, project_id: projectId }));
 
     broadcast({
       event: evt.event,

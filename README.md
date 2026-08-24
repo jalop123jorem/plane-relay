@@ -11,8 +11,11 @@ así nunca lo pisa un update del template de Plane.
 ## Endpoints
 
 - `GET /health` — 200 si está vivo.
-- `POST /notify` — Plane llama aquí en cada evento `workitem.*`. Verifica
+- `POST /notify` — Plane llama aquí en cada evento de work item. Verifica
   `X-Plane-Signature` (HMAC-SHA256 sobre el body crudo) contra `PLANE_WEBHOOK_SECRET`.
+  Ojo: esta instancia (Plane CE v1.4.1) manda `"event": "issue"` a secas — NO
+  `"workitem.updated"` como documenta developers.plane.so/dev-tools/intro-webhooks.
+  Confirmado con logging real el 2026-08-24. El server acepta ambos formatos.
 - `GET /events` — SSE. El userscript de Tampermonkey (`tampermonkey/plane-live-refresh.user.js`)
   se conecta aquí.
 
