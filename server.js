@@ -97,27 +97,18 @@ const INJECT_CLIENT_JS = `(function () {
     var m = location.pathname.match(/projects\\/([0-9a-f-]{36})/i);
     return m ? m[1] : null;
   }
-  // Recarga sola, sin banner ni clic -- pedido explicito del usuario. Unica
-  // excepcion: si esta escribiendo (input/textarea/editor de texto rico), se
-  // espera a que suelte el foco para no borrarle algo sin guardar.
-  function isEditing() {
-    var el = document.activeElement;
-    if (!el) return false;
-    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return true;
-    return !!el.isContentEditable;
-  }
-  var reloadPending = false;
-  function reloadNow() { location.reload(); }
-  function scheduleReload() {
-    if (reloadPending) return;
-    if (!isEditing()) { reloadNow(); return; }
-    reloadPending = true;
-    document.addEventListener('focusout', function onBlur() {
-      document.removeEventListener('focusout', onBlur);
-      reloadPending = false;
-      if (isEditing()) scheduleReload();
-      else reloadNow();
-    }, { once: true });
+  function showBanner() {
+    if (document.getElementById('plane-relay-banner')) return;
+    var bar = document.createElement('div');
+    bar.id = 'plane-relay-banner';
+    bar.textContent = 'Hay cambios nuevos en Plane — clic para actualizar';
+    bar.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'right:0', 'z-index:99999',
+      'background:#3b82f6', 'color:#fff', 'text-align:center',
+      'padding:8px', 'font:14px sans-serif', 'cursor:pointer',
+    ].join(';');
+    bar.onclick = function () { location.reload(); };
+    document.body.appendChild(bar);
   }
   function connect() {
     var es = new EventSource('/__plane-relay/events');
@@ -125,7 +116,7 @@ const INJECT_CLIENT_JS = `(function () {
       var payload;
       try { payload = JSON.parse(e.data); } catch (err) { return; }
       var cur = currentProjectId();
-      if (!cur || payload.project_id === cur) scheduleReload();
+      if (!cur || payload.project_id === cur) showBanner();
     };
     es.onerror = function () {
       es.close();
