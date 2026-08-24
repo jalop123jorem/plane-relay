@@ -49,7 +49,10 @@ function handleNotify(req, res) {
       return;
     }
 
-    if (!/^workitem\./.test(evt.event || '')) return;
+    console.log('[notify]', JSON.stringify({ event: evt.event, entity_type: evt.entity_type }));
+
+    const isWorkItemEvent = /^workitem\./.test(evt.event || '') || /^issue\./.test(evt.event || '');
+    if (!isWorkItemEvent) return;
 
     const projectId = evt.data && (evt.data.project_id || evt.data.project);
     if (ALLOWED_PROJECT_ID && projectId && projectId !== ALLOWED_PROJECT_ID) return;
