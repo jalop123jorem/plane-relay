@@ -49,9 +49,9 @@ function handleNotify(req, res) {
       return;
     }
 
-    console.log('[notify]', JSON.stringify({ event: evt.event, entity_type: evt.entity_type }));
+    console.log('[notify]', JSON.stringify(evt));
 
-    const isWorkItemEvent = /^workitem\./.test(evt.event || '') || /^issue\./.test(evt.event || '');
+    const isWorkItemEvent = /^workitem\./.test(evt.event || '') || /^issue\.?/.test(evt.event || '');
     if (!isWorkItemEvent) return;
 
     const projectId = evt.data && (evt.data.project_id || evt.data.project);
