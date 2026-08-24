@@ -1,10 +1,12 @@
 const http = require('http');
+const net = require('net');
 const crypto = require('crypto');
 
 const PORT = process.env.PORT || 4000;
 const WEBHOOK_SECRET = process.env.PLANE_WEBHOOK_SECRET || '';
 const ALLOWED_PROJECT_ID = process.env.ALLOWED_PROJECT_ID || '';
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://tareas.orem.com.mx';
+const PLANE_ORIGIN = process.env.PLANE_ORIGIN || 'http://plane_plane-proxy-1:80';
 
 const clients = new Set();
 
@@ -86,21 +88,125 @@ function handleEvents(req, res) {
   });
 }
 
+// Se inyecta en cada documento HTML que sirve Plane (via handleProxy) para que
+// el aviso de "hay cambios" llegue a todos los usuarios sin instalar nada del
+// lado del cliente -- reemplaza al userscript de Tampermonkey.
+const INJECT_CLIENT_JS = `(function () {
+  'use strict';
+  function currentProjectId() {
+    var m = location.pathname.match(/projects\\/([0-9a-f-]{36})/i);
+    return m ? m[1] : null;
+  }
+  function showBanner() {
+    if (document.getElementById('plane-relay-banner')) return;
+    var bar = document.createElement('div');
+    bar.id = 'plane-relay-banner';
+    bar.textContent = 'Hay cambios nuevos en Plane — clic para actualizar';
+    bar.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'right:0', 'z-index:99999',
+      'background:#3b82f6', 'color:#fff', 'text-align:center',
+      'padding:8px', 'font:14px sans-serif', 'cursor:pointer',
+    ].join(';');
+    bar.onclick = function () { location.reload(); };
+    document.body.appendChild(bar);
+  }
+  function connect() {
+    var es = new EventSource('/__plane-relay/events');
+    es.onmessage = function (e) {
+      var payload;
+      try { payload = JSON.parse(e.data); } catch (err) { return; }
+      var cur = currentProjectId();
+      if (!cur || payload.project_id === cur) showBanner();
+    };
+    es.onerror = function () {
+      es.close();
+      setTimeout(connect, 5000);
+    };
+  }
+  connect();
+})();`;
+
+function injectIntoHtml(html) {
+  const tag = '<script src="/__plane-relay/inject.js"></script>';
+  return html.includes('</body>') ? html.replace('</body>', `${tag}</body>`) : html + tag;
+}
+
+// Reverse proxy transparente hacia el proxy interno de Plane (mismo host,
+// misma red overlay de Easypanel) -- solo reescribe el documento HTML para
+// meter el listener de SSE. Todo lo demas (API, assets, uploads) pasa igual.
+function handleProxy(req, res) {
+  const target = new URL(req.url, PLANE_ORIGIN);
+  const headers = { ...req.headers, host: target.host };
+  delete headers['accept-encoding']; // texto plano, asi la inyeccion no tiene que degzipear
+
+  const proxyReq = http.request(
+    { hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers },
+    (proxyRes) => {
+      const contentType = proxyRes.headers['content-type'] || '';
+      if (!contentType.includes('text/html')) {
+        res.writeHead(proxyRes.statusCode, proxyRes.headers);
+        proxyRes.pipe(res);
+        return;
+      }
+      const chunks = [];
+      proxyRes.on('data', (c) => chunks.push(c));
+      proxyRes.on('end', () => {
+        const body = injectIntoHtml(Buffer.concat(chunks).toString('utf8'));
+        const outHeaders = { ...proxyRes.headers };
+        delete outHeaders['content-length'];
+        delete outHeaders['transfer-encoding'];
+        outHeaders['content-length'] = Buffer.byteLength(body);
+        res.writeHead(proxyRes.statusCode, outHeaders);
+        res.end(body);
+      });
+    },
+  );
+  proxyReq.on('error', () => {
+    if (!res.headersSent) res.writeHead(502);
+    res.end('bad gateway');
+  });
+  req.pipe(proxyReq);
+}
+
+function handleUpgrade(req, socket, head) {
+  const target = new URL(req.url, PLANE_ORIGIN);
+  const proxySocket = net.connect(target.port || 80, target.hostname, () => {
+    let rawHeaders = `${req.method} ${target.pathname}${target.search} HTTP/1.1\r\n`;
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      if (req.rawHeaders[i].toLowerCase() === 'host') continue;
+      rawHeaders += `${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}\r\n`;
+    }
+    rawHeaders += `Host: ${target.host}\r\n\r\n`;
+    proxySocket.write(rawHeaders);
+    if (head && head.length) proxySocket.write(head);
+    proxySocket.pipe(socket);
+    socket.pipe(proxySocket);
+  });
+  proxySocket.on('error', () => socket.destroy());
+  socket.on('error', () => proxySocket.destroy());
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok');
     return;
   }
-  if (req.method === 'GET' && req.url === '/events') {
+  if (req.method === 'GET' && (req.url === '/events' || req.url === '/__plane-relay/events')) {
     handleEvents(req, res);
+    return;
+  }
+  if (req.method === 'GET' && req.url === '/__plane-relay/inject.js') {
+    res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' }).end(INJECT_CLIENT_JS);
     return;
   }
   if (req.method === 'POST' && req.url === '/notify') {
     handleNotify(req, res);
     return;
   }
-  res.writeHead(404).end();
+  handleProxy(req, res);
 });
+
+server.on('upgrade', handleUpgrade);
 
 server.listen(PORT, () => {
   console.log(`plane-relay listening on ${PORT}`);
