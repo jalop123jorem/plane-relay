@@ -141,6 +141,18 @@ function handleProxy(req, res) {
   const headers = { ...req.headers };
   delete headers['accept-encoding']; // texto plano, asi la inyeccion no tiene que degzipear
 
+  // El nginx de Plane sirve el index.html con ETag/Last-Modified y SIN Cache-Control.
+  // Si dejamos pasar la peticion condicional, contesta 304 sin cuerpo -> el navegador
+  // reusa SU copia cacheada, que es la de ANTES de que existiera la inyeccion, y el
+  // script nunca llega (medido el 2026-08-24: asi es como se veia "no funciona").
+  // Para las navegaciones (Accept: text/html) quitamos los condicionales y forzamos
+  // un 200 con cuerpo para poder inyectar. Los assets (hasheados) siguen cacheando.
+  const wantsHtml = (req.headers.accept || '').includes('text/html');
+  if (wantsHtml) {
+    delete headers['if-none-match'];
+    delete headers['if-modified-since'];
+  }
+
   const proxyReq = http.request(
     { hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers },
     (proxyRes) => {
@@ -157,6 +169,12 @@ function handleProxy(req, res) {
         const outHeaders = { ...proxyRes.headers };
         delete outHeaders['content-length'];
         delete outHeaders['transfer-encoding'];
+        // El ETag/Last-Modified de arriba describen el archivo de nginx, no lo que
+        // acabamos de reescribir -- dejarlos pasar revive el bug del 304. El shell
+        // pesa ~6 KB y es una SPA, no vale la pena cachearlo.
+        delete outHeaders['etag'];
+        delete outHeaders['last-modified'];
+        outHeaders['cache-control'] = 'no-store';
         outHeaders['content-length'] = Buffer.byteLength(body);
         res.writeHead(proxyRes.statusCode, outHeaders);
         res.end(body);
