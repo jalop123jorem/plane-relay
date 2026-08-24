@@ -38,7 +38,7 @@ repo como referencia/fallback pero ya no hace falta instalarlo.
 |---|---|---|
 | `PLANE_WEBHOOK_SECRET` | sí | El secreto que Plane muestra una sola vez al crear el webhook. |
 | `PLANE_ORIGIN` | no | A dónde reenviar todo lo que no es del relay. Default `http://plane_plane-proxy-1:80` (el proxy interno de Plane, mismo host, misma red overlay de Easypanel). |
-| `ALLOWED_PROJECT_ID` | no | Si se define, ignora eventos de otros proyectos (`0ade1f44-352a-42c1-a37e-617deac28515` para OREMI). |
+| `ALLOWED_PROJECT_ID` | no | Si se define, ignora eventos de otros proyectos. **Sin definir en producción a propósito** desde 2026-08-24: cubre los 6 proyectos del workspace (OREMI, CAYS, AAC2, BACKLOG, VOBOS, CONTA), no solo uno. |
 | `ALLOWED_ORIGIN` | no | Origen permitido en el CORS de `/events` (solo relevante para el userscript viejo, cross-origin). Default `https://tareas.orem.com.mx`. |
 | `PORT` | no | Default `4000`. |
 
