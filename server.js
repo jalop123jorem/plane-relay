@@ -136,7 +136,9 @@ function injectIntoHtml(html) {
 // meter el listener de SSE. Todo lo demas (API, assets, uploads) pasa igual.
 function handleProxy(req, res) {
   const target = new URL(req.url, PLANE_ORIGIN);
-  const headers = { ...req.headers, host: target.host };
+  // Host header SIN tocar: Plane valida ALLOWED_HOSTS/CSRF_TRUSTED_ORIGINS contra
+  // tareas.orem.com.mx, igual que cuando Traefik le pega directo (PassHostHeader).
+  const headers = { ...req.headers };
   delete headers['accept-encoding']; // texto plano, asi la inyeccion no tiene que degzipear
 
   const proxyReq = http.request(
@@ -173,10 +175,9 @@ function handleUpgrade(req, socket, head) {
   const proxySocket = net.connect(target.port || 80, target.hostname, () => {
     let rawHeaders = `${req.method} ${target.pathname}${target.search} HTTP/1.1\r\n`;
     for (let i = 0; i < req.rawHeaders.length; i += 2) {
-      if (req.rawHeaders[i].toLowerCase() === 'host') continue;
       rawHeaders += `${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}\r\n`;
     }
-    rawHeaders += `Host: ${target.host}\r\n\r\n`;
+    rawHeaders += `\r\n`;
     proxySocket.write(rawHeaders);
     if (head && head.length) proxySocket.write(head);
     proxySocket.pipe(socket);
