@@ -2,11 +2,23 @@ const http = require('http');
 const net = require('net');
 const crypto = require('crypto');
 
+const https = require('https');
+
 const PORT = process.env.PORT || 4000;
 const WEBHOOK_SECRET = process.env.PLANE_WEBHOOK_SECRET || '';
 const ALLOWED_PROJECT_ID = process.env.ALLOWED_PROJECT_ID || '';
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://tareas.orem.com.mx';
 const PLANE_ORIGIN = process.env.PLANE_ORIGIN || 'http://plane_plane-proxy-1:80';
+
+// Reenvío al listener de dev-harness (tools/plane-tidy-hook.mjs) que desasigna la card en
+// segundos cuando se cierra -- ver dev-harness/docs/METODOLOGIA.md "Limpieza de
+// Done/Cancelled". URL completa CON el secreto de path incluido (mismo secreto que espera el
+// listener, sembrado ahí vía Bitwarden/bws-seed.mjs -- este proceso NUNCA lo genera ni lo
+// valida, solo lo reenvía tal cual se lo dieron). Sin definir, el reenvío se salta por completo
+// -- esta pieza es opcional y no debe romper el proxy/SSE si no está configurada.
+//   ej: http://172.18.0.1:8788/<secreto-del-listener>
+const PLANE_TIDY_HOOK_URL = process.env.PLANE_TIDY_HOOK_URL || '';
+const PLANE_TIDY_HOOK_TIMEOUT_MS = Number(process.env.PLANE_TIDY_HOOK_TIMEOUT_MS || 5000);
 
 const clients = new Set();
 
@@ -22,6 +34,38 @@ function verifySignature(rawBody, signatureHeader) {
 function broadcast(payload) {
   const line = `data: ${JSON.stringify(payload)}\n\n`;
   for (const res of clients) res.write(line);
+}
+
+/** Fire-and-forget al listener local de dev-harness. Un listener caído/lento NUNCA debe tumbar
+ * este proceso ni retrasar la respuesta a Plane -- ya se respondió 200 antes de llamar esto
+ * (ver handleNotify), y el reconciliador diario (plane-tidy.mjs --aplicar) es la red de
+ * seguridad si esto se pierde. */
+function forwardToTidyHook(payload) {
+  if (!PLANE_TIDY_HOOK_URL) return;
+  let url;
+  try {
+    url = new URL(PLANE_TIDY_HOOK_URL);
+  } catch (e) {
+    console.error('[tidy-hook] PLANE_TIDY_HOOK_URL invalida:', e.message);
+    return;
+  }
+  const data = JSON.stringify(payload);
+  const mod = url.protocol === 'https:' ? https : http;
+  const q = mod.request(
+    {
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: url.pathname,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+      timeout: PLANE_TIDY_HOOK_TIMEOUT_MS,
+    },
+    (r) => r.resume() // no nos importa la respuesta -- ya le respondimos a Plane
+  );
+  q.on('timeout', () => q.destroy());
+  q.on('error', (e) => console.error('[tidy-hook] error reenviando:', e.message));
+  q.write(data);
+  q.end();
 }
 
 function handleNotify(req, res) {
@@ -60,14 +104,26 @@ function handleNotify(req, res) {
     const projectId = evt.data && (evt.data.project_id || evt.data.project);
     if (ALLOWED_PROJECT_ID && projectId && projectId !== ALLOWED_PROJECT_ID) return;
 
-    console.log('[notify]', JSON.stringify({ event: evt.event, action: evt.action, entity_id: evt.data && evt.data.id, project_id: projectId }));
+    // `entity_id` a nivel raíz del evento no existe en esta instancia (Plane CE v1.4.1) -- el id
+    // de la card viene en `data.id`. El broadcast SSE llevaba `entity_id: undefined` desde el
+    // 2026-08-24 (bug encontrado 2026-09-02 al construir el reenvío de abajo, que sí necesita el
+    // id correcto). Un `undefined` no rompe nada del lado del cliente (nadie lo leía todavía),
+    // pero tampoco servía para nada.
+    const entityId = evt.data && evt.data.id;
+
+    console.log('[notify]', JSON.stringify({ event: evt.event, action: evt.action, entity_id: entityId, project_id: projectId }));
 
     broadcast({
       event: evt.event,
-      entity_id: evt.entity_id,
+      entity_id: entityId,
       project_id: projectId,
       at: Date.now(),
     });
+
+    // dev-harness/tools/plane-tidy-hook.mjs decide solo si esto amerita algo -- aquí no se
+    // filtra por estado ni se intenta saber si es un cierre, sería duplicar esa política. Se
+    // reenvía TODO work-item event que pasó el filtro de proyecto de arriba.
+    if (entityId) forwardToTidyHook({ project_id: projectId, issue_id: entityId });
   });
 }
 

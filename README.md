@@ -23,6 +23,9 @@ repo como referencia/fallback pero ya no hace falta instalarlo.
   Ojo: esta instancia (Plane CE v1.4.1) manda `"event": "issue"` a secas — NO
   `"workitem.updated"` como documenta developers.plane.so/dev-tools/intro-webhooks.
   Confirmado con logging real el 2026-08-24. El server acepta ambos formatos.
+  Desde 2026-09-02, además del broadcast SSE, reenvía `{project_id, issue_id}` (fire-and-forget,
+  ya respondido 200 a Plane) al listener de `dev-harness` que desasigna la card cuando se
+  cierra — ver `PLANE_TIDY_HOOK_URL` abajo y `dev-harness/tools/plane-tidy-hook.mjs`.
 - `GET /events` (y alias `/__plane-relay/events`) — SSE. El script inyectado se
   conecta al alias (mismo origen que `tareas.orem.com.mx`); el userscript viejo usa
   la ruta corta.
@@ -41,6 +44,8 @@ repo como referencia/fallback pero ya no hace falta instalarlo.
 | `ALLOWED_PROJECT_ID` | no | Si se define, ignora eventos de otros proyectos. **Sin definir en producción a propósito** desde 2026-08-24: cubre los 6 proyectos del workspace (OREMI, CAYS, AAC2, BACKLOG, VOBOS, CONTA), no solo uno. |
 | `ALLOWED_ORIGIN` | no | Origen permitido en el CORS de `/events` (solo relevante para el userscript viejo, cross-origin). Default `https://tareas.orem.com.mx`. |
 | `PORT` | no | Default `4000`. |
+| `PLANE_TIDY_HOOK_URL` | no | URL completa (CON el secreto de path incluido) del listener de `dev-harness` -- ej. `http://172.18.0.1:8788/<secreto>`, la IP del gateway de `docker_gwbridge` que alcanza el host. **Sin definir, el reenvío se salta por completo** -- es opcional, no debe romper el proxy/SSE si no está configurado. Este proceso nunca genera ni valida el secreto, solo lo reenvía tal cual se lo dieron (vive en Bitwarden/`dev-harness`, no aquí). |
+| `PLANE_TIDY_HOOK_TIMEOUT_MS` | no | Default `5000`. Timeout del reenvío -- un listener lento/caído nunca debe retrasar la respuesta a Plane (ya se respondió 200 antes) ni tumbar este proceso. |
 
 ## Deploy en Easypanel
 
